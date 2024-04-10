@@ -92,3 +92,55 @@ void* malloc(size_t size)
     // 返回用户可用的内存地址，跳过新分配内存块的头部信息
     return (void*)(header + 1);
 }
+void free(void *block)
+{
+    header_t *header, *tmp;
+    void *programbreak;
+
+    // 检查传入的内存块指针是否为空，若为空则直接返回
+    if (!block)
+        return;
+
+    // 加锁，确保在多线程环境下，内存释放操作是线程安全的
+    pthread_mutex_lock(&global_malloc_lock);
+
+    // 计算指向内存块头部的指针，因为用户传入的block是指向用户内存区域的指针
+    header = (header_t*)block - 1;
+
+    // 获取当前进程的程序断点（brk），即堆的末尾
+    programbreak = sbrk(0);
+
+    // 判断传入的内存块是否位于堆的末尾
+    if ((char*)block + header->s.size == programbreak) {
+
+        // 如果是堆末尾的最后一个内存块
+        if (head == tail) {
+            // 清空头尾指针，表示堆已清空
+            head = tail = NULL;
+        } else {
+            // 如果不是唯一的内存块，遍历链表找到尾节点的前一个节点
+            tmp = head;
+            while (tmp) {
+                if (tmp->s.next == tail) {
+                    // 将尾节点前一个节点的next指针设为NULL，更新尾节点
+                    tmp->s.next = NULL;
+                    tail = tmp;
+                }
+                tmp = tmp->s.next;
+            }
+        }
+
+        // 使用sbrk减小程序断点，释放堆末尾的内存块给操作系统
+        sbrk(0 - sizeof(header_t) - header->s.size);
+
+        // 解锁并返回
+        pthread_mutex_unlock(&global_malloc_lock);
+        return;
+    }
+
+    // 如果不是堆末尾的内存块，则仅将其标记为未使用（free）
+    header->s.is_free = 1;
+
+    // 解锁，完成内存释放操作
+    pthread_mutex_unlock(&global_malloc_lock);
+}
